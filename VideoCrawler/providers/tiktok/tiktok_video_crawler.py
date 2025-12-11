@@ -6,7 +6,7 @@ warnings.filterwarnings("ignore")
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
+from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 from datetime import datetime
 
@@ -14,9 +14,8 @@ class TikTokVideoCrawler:
     def __init__(self):
         self.id = None
         self.link = None
-        self.soup = None
         self.storage_path = None
-        self.video_download_path = None
+        self.video_download_link = None
         self.session = requests.session()
         self.driver = ChromeDriver(window_size = "--window-size=300,1000").get_driver()
         self.video_schema = TikTokVideoSchema()
@@ -32,8 +31,37 @@ class TikTokVideoCrawler:
             return False
         self.link = final_link
         return True
+
+    def save_to_json(self):
+        filename = f"tiktok_{self.id}.json"
+        file_path = os.path.join(self.storage_path, filename)
+        try:
+            with open(file_path, 'w', encoding = 'utf-8') as f:
+                json.dump(self.video_schema.model_dump(), f, ensure_ascii = False, indent = 4)
+            print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_video_crawler.save_to_json] Saved data for video {self.id}""")
+        except Exception as e:
+            print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.save_to_json] Unable to save data for video {self.id}:\n\t{str(e)}""")
+
+    def download_video(self):
+        if not self.video_download_link:
+            print (f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Unable to download video {self.id}""")
+            return
+
+        filename = f"tiktok_{self.id}.mp4"
+        file_path = os.path.join(self.storage_path, filename)
+        headers = TIKTOK_HEADERS
+        headers["Range"] = "bytes=0-"
+        
+        try:
+            response = self.session.get(self.video_download_link, headers = headers, cookies = TIKTOK_COOKIES)
+            response.raise_for_status()
+            with open(file_path, 'wb') as f:
+                f.write(response.content)
+            print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Saved video {self.id}""")
+        except Exception as e:
+            print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Undefined error for video {self.id}:\n\t{str(e)}""")
     
-    def get_video_html_source(self, view_relies: int = 7):
+    def get_video_comments(self, view_relies: int = 7):
         self.driver.get(self.link)
         time.sleep(2)
 
@@ -80,14 +108,12 @@ class TikTokVideoCrawler:
                 pass
         
         raw_html = self.driver.page_source
-        self.soup = BeautifulSoup(raw_html, "html.parser")
+        soup = BeautifulSoup(raw_html, "html.parser")
+        self.video_schema.comments = [comment.get_text(strip = True) for comment in soup.select('span[data-e2e="comment-level-1"], span[data-e2e="comment-level-2"]')]
 
-    def extract_video_data_from_html(self):
+    def get_video_metadata(self):
         self.video_schema.id = self.id
         self.video_schema.author = re.search(r'tiktok\.com/@([^/]+)/video', self.link).group(1)
-
-        soup = self.soup
-        self.video_schema.comments = [comment.get_text(strip = True) for comment in soup.select('span[data-e2e="comment-level-1"], span[data-e2e="comment-level-2"]')]
         
         response = self.session.get(self.link, headers = TIKTOK_HEADERS, cookies = TIKTOK_COOKIES)
         soup = BeautifulSoup(response.text, "html.parser")
@@ -117,38 +143,10 @@ class TikTokVideoCrawler:
                 self.video_schema.hashtag = ['#'+tag.get('hashtagName', '') for tag in text_tags if tag.get('hashtagName')]
                 
                 video_data = item_struct.get('video', {})
-                self.video_download_path = video_data.get('playAddr', '')
+                self.video_download_link = video_data.get('playAddr', '')
             except Exception as e:
                 print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.extract_video_data_from_html] Unable to extract info from video {self.id}:\n\t{str(e)}""")
-
-    def save_to_json(self):
-        filename = f"tiktok_{self.id}.json"
-        file_path = os.path.join(self.storage_path, filename)
-        try:
-            with open(file_path, 'w', encoding = 'utf-8') as f:
-                json.dump(self.video_schema.model_dump(), f, ensure_ascii = False, indent = 4)
-            print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_video_crawler.save_to_json] Saved data for video {self.id}""")
-        except Exception as e:
-            print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.save_to_json] Unable to save data for video {self.id}:\n\t{str(e)}""")
-
-    def download_video(self):
-        if not self.video_download_path:
-            print (f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Unable to download video {self.id}""")
-            return
-
-        filename = f"tiktok_{self.id}.mp4"
-        file_path = os.path.join(self.storage_path, filename)
-        headers = TIKTOK_HEADERS
-        headers["Range"] = "bytes=0-"
-        
-        try:
-            response = self.session.get(self.video_download_path, headers = headers, cookies = TIKTOK_COOKIES)
-            response.raise_for_status()
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
-            print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Saved video {self.id}""")
-        except Exception as e:
-            print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Undefined error for video {self.id}:\n\t{str(e)}""")
+        self.download_video()
 
     def quit_driver(self):
         self.driver.quit()
@@ -160,13 +158,10 @@ class TikTokVideoCrawler:
 
         self.id = re.search(r'/video/(\d+)', self.link).group(1)
         self.storage_path = os.path.join("data/", self.id)
-        if os.path.isdir(self.storage_path):
-            return
         os.makedirs(self.storage_path, exist_ok = True)
 
-        self.get_video_html_source()
-        self.extract_video_data_from_html()
+        with ThreadPoolExecutor(max_workers = 2) as executor:
+            f0 = executor.submit(self.get_video_comments)
+            f1 = executor.submit(self.get_video_metadata)
 
         self.save_to_json()
-        self.download_video()
-        # self.quit_driver()
