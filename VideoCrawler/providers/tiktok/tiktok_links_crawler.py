@@ -1,36 +1,41 @@
 from VideoCrawler.base import ChromeDriver
 from VideoCrawler.schema import TikTokLinksSchema
 
-import json, time, re
+import json, time, re, logging
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
+
+logging.basicConfig(
+    level = logging.INFO,
+    format = "[%(levelname)s] [%(filename)s] %(message)s"
+)
+LOGGER = logging.getLogger()
 
 class TikTokLinksCrawler:
     def __init__(self):
         self.driver = ChromeDriver().get_driver()
         self.driver.get("https://www.tiktok.com")
+        self.__load_cookies()
+        # self.link_schema = TikTokLinksSchema()
 
+    def __load_cookies(self):
         try:
             with open("VideoCrawler/providers/tiktok/tiktok_cookies.json", "r", encoding = "utf-8") as f:
                 cookie_data = json.load(f)
         except:
-            raise FileNotFoundError("""[ERROR] [VideoCrawler.providers.tiktok.tiktok_links_crawler] no tiktok_cookies.json found""")
+            LOGGER.error("No tiktok_cookies.json found")
+            raise
         self.cookies = cookie_data["cookies"]
         time.sleep(2)
         for c in self.cookies:
-            try:
-                self.driver.add_cookie({
-                    "name": c["name"],
-                    "value": c["value"],
-                    "domain": c.get("domain", None),
-                    "path": c.get("path", "/"),
-                    "secure": c.get("secure", False),
-                    "httpOnly": c.get("httpOnly", False),
-                })
-            except Exception as e:
-                print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_links_crawler.get_html_source_by_keyword] Skipped cookie {c.get("name"):\n\t{str(e)}}""")
-        
-        # self.link_schema = TikTokLinksSchema()
+            self.driver.add_cookie({
+                "name": c["name"],
+                "value": c["value"],
+                "domain": c.get("domain", None),
+                "path": c.get("path", "/"),
+                "secure": c.get("secure", False),
+                "httpOnly": c.get("httpOnly", False),
+            })
 
     def extract_links_from_html(self, raw_html):
         pattern = re.compile(
@@ -41,7 +46,7 @@ class TikTokLinksCrawler:
             href = tag["href"]
             if pattern.match(href):
                 yield href
-                
+
     def get_html_source_by_keyword(self, keyword: str, scrolling: int = 5):
         encoded = keyword.replace(" ", "%20")
         url = f"https://www.tiktok.com/search?q={encoded}"
@@ -49,14 +54,19 @@ class TikTokLinksCrawler:
         time.sleep(2)
 
         for _ in range(scrolling):
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            # self.driver.execute_script("window.scrollBy(0, 1000);") # Cant scroll due to Tiktok uses a virtual/infinite scroll container
+            self.driver.execute_script("""
+                const items = document.querySelectorAll('a[href*="/video/"]');
+                if (items.length) items[items.length - 1].scrollIntoView();
+            """)
             time.sleep(2)
+
         raw_html = self.driver.page_source
         for link in self.extract_links_from_html(raw_html):
             yield link
 
         time.sleep(2)
-        print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_links_crawler.get_html_source_by_keyword] Crawled keyword '{keyword}'""")        
+        LOGGER.info(f"Crawled keyword '{keyword}'")
 
     def get_html_source_from_channel(self, channel: str):
         url = f"https://www.tiktok.com/@{channel}"
@@ -90,12 +100,12 @@ class TikTokLinksCrawler:
             yield link
 
         time.sleep(2)
-        print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_links_crawler.get_html_source_from_channel] Crawled channel '{channel}'""")
+        LOGGER.info(f"Crawled channel '{channel}'")
 
     def quit_driver(self):
         self.driver.quit()
 
-    def execute(self, keyword: str = None, channel: str = None):
+    def run(self, keyword: str = None, channel: str = None):
         if keyword:
             for link in self.get_html_source_by_keyword(keyword):
                 yield link

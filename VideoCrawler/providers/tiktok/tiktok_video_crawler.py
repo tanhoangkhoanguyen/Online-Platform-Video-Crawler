@@ -1,7 +1,7 @@
 from VideoCrawler.base import ChromeDriver
 from VideoCrawler.schema import TikTokVideoSchema, TIKTOK_HEADERS, TIKTOK_COOKIES
 
-import json, requests, time, re, os, warnings
+import json, requests, time, re, os, logging, warnings
 warnings.filterwarnings("ignore")
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -9,6 +9,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 from datetime import datetime
+
+logging.basicConfig(
+    level = logging.INFO,
+    format = "[%(levelname)s] [%(filename)s] %(message)s"
+)
+LOGGER = logging.getLogger()
 
 class TikTokVideoCrawler:
     def __init__(self):
@@ -27,7 +33,7 @@ class TikTokVideoCrawler:
                 "https://vt.tiktok.com", 
                 "https://www.tiktok.com"
             )):
-            print("""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.check_link] Wrong input link""")
+            LOGGER.warning("Wrong input link")
             return False
         self.link = final_link
         return True
@@ -38,13 +44,13 @@ class TikTokVideoCrawler:
         try:
             with open(file_path, 'w', encoding = 'utf-8') as f:
                 json.dump(self.video_schema.model_dump(), f, ensure_ascii = False, indent = 4)
-            print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_video_crawler.save_to_json] Saved data for video {self.id}""")
+            LOGGER.info(f"Saved data for video {self.id}")
         except Exception as e:
-            print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.save_to_json] Unable to save data for video {self.id}:\n\t{str(e)}""")
+            LOGGER.error(f"Unable to save data for video {self.id}:\n\t{str(e)}")
 
     def download_video(self):
         if not self.video_download_link:
-            print (f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Unable to download video {self.id}""")
+            LOGGER.error(f"Unable to download video {self.id}")
             return
 
         filename = f"tiktok_{self.id}.mp4"
@@ -57,9 +63,9 @@ class TikTokVideoCrawler:
             response.raise_for_status()
             with open(file_path, 'wb') as f:
                 f.write(response.content)
-            print(f"""[INFO] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Saved video {self.id}""")
+            LOGGER.info(f"Saved video {self.id}")
         except Exception as e:
-            print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.download_video] Undefined error for video {self.id}:\n\t{str(e)}""")
+            LOGGER.error(f"Undefined error for video {self.id}:\n\t{str(e)}")
     
     def get_video_comments(self, view_relies: int = 7):
         self.driver.get(self.link)
@@ -126,7 +132,7 @@ class TikTokVideoCrawler:
                 date_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
                 self.video_schema.date = date_str
             except Exception as e:
-                print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.extract_video_data_from_html] Unable to extract the video date {self.id}:\n\t{str(e)}""")
+                LOGGER.error(f"Unable to extract the video date {self.id}:\n\t{str(e)}")
                 
         if script_tag:
             try:
@@ -145,13 +151,13 @@ class TikTokVideoCrawler:
                 video_data = item_struct.get('video', {})
                 self.video_download_link = video_data.get('playAddr', '')
             except Exception as e:
-                print(f"""[ERROR] [VideoCrawler.providers.tiktok.tiktok_video_crawler.extract_video_data_from_html] Unable to extract info from video {self.id}:\n\t{str(e)}""")
+                LOGGER.error(f"Unable to extract info from video {self.id}:\n\t{str(e)}")
         self.download_video()
 
     def quit_driver(self):
         self.driver.quit()
         
-    def execute(self, link: str):
+    def run(self, link: str):
         self.link = link
         if self.check_link() == False:
             return
@@ -161,7 +167,7 @@ class TikTokVideoCrawler:
         os.makedirs(self.storage_path, exist_ok = True)
 
         with ThreadPoolExecutor(max_workers = 2) as executor:
-            f0 = executor.submit(self.get_video_comments)
-            f1 = executor.submit(self.get_video_metadata)
+            executor.submit(self.get_video_comments)
+            executor.submit(self.get_video_metadata)
 
         self.save_to_json()

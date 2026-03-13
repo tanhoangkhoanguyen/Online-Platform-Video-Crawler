@@ -1,9 +1,17 @@
+# Online Platform Video Crawler
+A Python-based crawler for extracting videos and metadata from online platforms. Currently supports..
+- TikTok
+
+## Quick Start
+1. Clone the repository:
+```bash
+git clone https://github.com/tanhoangkhoanguyen/Online-Platform-Video-Crawler.git
+cd Online-Platform-Video-Crawler
 ```
+
+2. Run these commands:
+```bash
 python -m venv venv
-Scripts/activate/venv
+venv\Scripts\activate
 python -m demo
 ```
-<!-- Fix comments extraction.
-Build parallel automated keywords & username crawl 
-Fix the code, bcz you cant reopen and authenticate multiple time-
-button to click the refresh for profile crawling->
