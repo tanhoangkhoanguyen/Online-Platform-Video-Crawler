@@ -56,7 +56,7 @@ class YoutubeVideoCrawler:
 
     def crawl_comments(
             self, 
-            scrolling: int = 5
+            scrolling: int = 1
         ):
         self.driver.get(self.url)
         time.sleep(2)

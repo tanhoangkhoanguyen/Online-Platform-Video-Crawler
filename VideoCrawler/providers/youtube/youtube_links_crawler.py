@@ -14,10 +14,10 @@ class YouTubeLinksCrawler:
 
     def scroll_page(
             self, 
-            scrolls: int = 5
+            scrolling: int = 1
         ):
         body = self.driver.find_element(By.TAG_NAME, "body")
-        for _ in range(scrolls):
+        for _ in range(scrolling):
             body.send_keys(Keys.END)
             time.sleep(2)
 
@@ -43,7 +43,7 @@ class YouTubeLinksCrawler:
     def crawl_by_channel(
             self, 
             channel: str, 
-            scrolling: int = 5
+            scrolling: int = 1
         ):
         url = f"https://www.youtube.com/@{channel}/videos"
         self.driver.get(url + "/videos")

@@ -87,8 +87,8 @@ class TikTokVideoCrawler:
     
     def crawl_comments(
             self,
-            scolling: int = 5,
-            view_relies: int = 5
+            scolling: int = 1,
+            view_relies: int = 1
         ):
         self.driver.get(self.url)
         time.sleep(2)

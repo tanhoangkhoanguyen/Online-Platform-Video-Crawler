@@ -32,7 +32,7 @@ class TikTokLinksCrawler:
 
     def scroll_page(
             self, 
-            scrolls: int = 5
+            scrolls: int = 1
         ):
         body = self.driver.find_element(By.TAG_NAME, "body")
         for _ in range(scrolls):
@@ -71,7 +71,7 @@ class TikTokLinksCrawler:
     def crawl_by_channel(
             self, 
             channel: str, 
-            scrolling: int = 5
+            scrolling: int = 1
         ):
         url = f"https://www.tiktok.com/@{channel}"
         self.driver.get(url)
