@@ -1,7 +1,8 @@
 from VideoCrawler.base import ChromeDriver
-from VideoCrawler.schema import TikTokVideoSchema, TIKTOK_HEADERS, TIKTOK_COOKIES
+from VideoCrawler.schema import VideoSchema, SingleCommentSchema, CommentSchema
+from logger import get_logger
 
-import json, requests, time, re, os, logging, warnings
+import json, requests, time, re, os, warnings
 warnings.filterwarnings("ignore")
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -10,65 +11,86 @@ from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-logging.basicConfig(
-    level = logging.INFO,
-    format = "[%(levelname)s] [%(filename)s] %(message)s"
-)
-LOGGER = logging.getLogger()
+LOGGER = get_logger(__name__)
+TIKTOK_HEADERS = {
+    "accept": "*/*",
+    "accept-language": "vi,en;q=0.9,en-GB;q=0.8,en-US;q=0.7",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0",
+    "Referer": "https://www.tiktok.com/",
+    "Accept-Encoding": "identity;q=1, *;q=0"
+}
+TIKTOK_COOKIES = {
+    'tt_webid': '1' * 19,
+    'tt_webid_v2': '1' * 19
+}
 
 class TikTokVideoCrawler:
     def __init__(self):
-        self.id = None
-        self.link = None
+        self.url = None
         self.storage_path = None
-        self.video_download_link = None
+        self.video_download_url = None
+        self.metadata = VideoSchema()
         self.session = requests.session()
         self.driver = ChromeDriver(window_size = "--window-size=300,1000").get_driver()
-        self.video_schema = TikTokVideoSchema()
 
-    def check_link(self):
-        response_check = requests.get(self.link, allow_redirects = True)
-        final_link = response_check.url
-        if not final_link.startswith((
+    def __debug_session(self, resp):
+        if not resp.ok:
+            LOGGER.error(f"response body: {resp.text}")
+        resp.raise_for_status()
+
+    def check_url(self):
+        response_check = requests.get(self.url, allow_redirects = True)
+        final_url = response_check.url
+        if not final_url.startswith((
                 "https://vt.tiktok.com", 
                 "https://www.tiktok.com"
             )):
-            LOGGER.warning("Wrong input link")
+            LOGGER.warning("Wrong input url")
             return False
-        self.link = final_link
+        self.url = final_url
         return True
 
     def save_to_json(self):
-        filename = f"tiktok_{self.id}.json"
+        filename = f"tiktok_{self.metadata.id}.json"
         file_path = os.path.join(self.storage_path, filename)
         try:
             with open(file_path, 'w', encoding = 'utf-8') as f:
-                json.dump(self.video_schema.model_dump(), f, ensure_ascii = False, indent = 4)
-            LOGGER.info(f"Saved data for video {self.id}")
+                json.dump(self.metadata.model_dump(), f, ensure_ascii = False, indent = 4)
+            LOGGER.info(f"Saved data for video {self.metadata.id}")
         except Exception as e:
-            LOGGER.error(f"Unable to save data for video {self.id}:\n\t{str(e)}")
+            LOGGER.error(f"Unable to save data for video {self.metadata.id}:\n\t{str(e)}")
 
-    def download_video(self):
-        if not self.video_download_link:
-            LOGGER.error(f"Unable to download video {self.id}")
-            return
-
-        filename = f"tiktok_{self.id}.mp4"
-        file_path = os.path.join(self.storage_path, filename)
-        headers = TIKTOK_HEADERS
-        headers["Range"] = "bytes=0-"
-        
-        try:
-            response = self.session.get(self.video_download_link, headers = headers, cookies = TIKTOK_COOKIES)
-            response.raise_for_status()
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
-            LOGGER.info(f"Saved video {self.id}")
-        except Exception as e:
-            LOGGER.error(f"Undefined error for video {self.id}:\n\t{str(e)}")
+    def crawl_metadata(self):
+        response = self.session.get(
+            self.url, 
+            headers = TIKTOK_HEADERS, 
+            cookies = TIKTOK_COOKIES
+        )
+        self.metadata.id = re.search(r'/video/(\d+)', self.url).group(1)
+        soup = BeautifulSoup(response.text, "html.parser")
+        script_tag = soup.find("script", id = "__UNIVERSAL_DATA_FOR_REHYDRATION__")
+        if script_tag:
+            try:
+                raw_json = script_tag.string
+                data = json.loads(raw_json)
+                item_struct = data['__DEFAULT_SCOPE__']['webapp.video-detail']['itemInfo']['itemStruct']
+                text_tags = item_struct.get('textExtra', [])
+                self.metadata.channel      = re.search(r'tiktok\.com/@([^/]+)/video', self.url).group(1)
+                self.metadata.description  = re.sub(r'#\w+', '', item_struct.get('desc', '')).strip()
+                self.metadata.date         = item_struct['createTime']
+                self.metadata.likes        = int(item_struct.get('stats', {}).get('diggCount', ''))
+                self.metadata.views        = int(item_struct.get('stats', {}).get('playCount', ''))
+                self.metadata.hashtag      = ['#'+tag.get('hashtagName', '') for tag in text_tags if tag.get('hashtagName')]
+                self.video_download_url = item_struct.get('video', {}).get('playAddr', '')
+            except Exception as e:
+                LOGGER.error(f"Unable to extract info from video {self.metadata.id}:\n\t{str(e)}")
     
-    def get_video_comments(self, view_relies: int = 7):
-        self.driver.get(self.link)
+    def crawl_comments(
+            self,
+            scolling: int = 1,
+            view_relies: int = 1
+        ):
+        self.driver.get(self.url)
         time.sleep(2)
 
         comment_btn = WebDriverWait(self.driver, 10).until(
@@ -76,23 +98,9 @@ class TikTokVideoCrawler:
         )
         comment_btn.click()
 
-        last_count = 0
-        no_change_count = 0
-
-        while True:
+        for _ in range (scolling):
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
-
-            comments = self.driver.find_elements(By.CSS_SELECTOR, 'span[data-e2e="comment-level-1"]')
-            current_count = len(comments)
-
-            if current_count == last_count:
-                no_change_count += 1
-                if no_change_count >= 2:
-                    break
-            else:
-                no_change_count = 0
-            last_count = current_count
+            time.sleep(2)
         
         for _ in range (view_relies):
             try:
@@ -109,65 +117,95 @@ class TikTokVideoCrawler:
                         btn.click()
                         time.sleep(0.2)
                     except:
-                        pass
+                        continue
             except:
-                pass
-        
+                continue
+
         raw_html = self.driver.page_source
         soup = BeautifulSoup(raw_html, "html.parser")
-        self.video_schema.comments = [comment.get_text(strip = True) for comment in soup.select('span[data-e2e="comment-level-1"], span[data-e2e="comment-level-2"]')]
+        comment_wrappers = soup.select('div[class*="DivCommentObjectWrapper"]')
+        for wrapper in comment_wrappers:
+            try:
+                level1 = wrapper.select_one('div[class*="DivCommentItemWrapper"]')
+                if not level1:
+                    continue
 
-    def get_video_metadata(self):
-        self.video_schema.id = self.id
-        self.video_schema.author = re.search(r'tiktok\.com/@([^/]+)/video', self.link).group(1)
+                author_tag_1 = level1.select_one('div[data-e2e="comment-username-1"] a p')
+                author_1 = author_tag_1.get_text(strip=True) if author_tag_1 else ""
+
+                comment_tag_1 = level1.select_one('span[data-e2e="comment-level-1"]')
+                comment_text_1 = comment_tag_1.get_text(strip=True) if comment_tag_1 else ""
+
+                comment_data = CommentSchema(
+                    author=author_1,
+                    comment=comment_text_1,
+                    replies=[]
+                )
+
+                reply_container = wrapper.select_one('div[class*="DivReplyContainer"]')
+                if reply_container:
+                    reply_wrappers = reply_container.select('div[class*="DivCommentItemWrapper"]')
+                    for reply in reply_wrappers:
+                        author_tag_2 = reply.select_one('div[data-e2e="comment-username-2"] a p')
+                        author_2 = author_tag_2.get_text(strip=True) if author_tag_2 else ""
+
+                        comment_tag_2 = reply.select_one('span[data-e2e="comment-level-2"]')
+                        if comment_tag_2:
+                            direct_spans = comment_tag_2.find_all('span', recursive=False)
+                            if direct_spans:
+                                comment_text_2 = " ".join(
+                                    s.get_text(strip=True) for s in direct_spans
+                                    if s.get_text(strip=True)
+                                )
+                            else:
+                                comment_text_2 = comment_tag_2.get_text(strip=True)
+                        else:
+                            comment_text_2 = ""
+
+                        if author_2 and comment_text_2:
+                            comment_data.replies.append(SingleCommentSchema(
+                                author=author_2,
+                                comment=comment_text_2
+                            ))
+
+                self.metadata.comments.append(comment_data)
+            except Exception as e:
+                print(f"Error parsing comment: {e}")
+                continue
+
+    def download_video(self):
+        if not self.video_download_url:
+            LOGGER.error(f"Unable to download video {self.metadata.id}")
+            return
+
+        filename = f"tiktok_{self.metadata.id}.mp4"
+        file_path = os.path.join(self.storage_path, filename)
+        headers = TIKTOK_HEADERS
+        headers["Range"] = "bytes=0-"
         
-        response = self.session.get(self.link, headers = TIKTOK_HEADERS, cookies = TIKTOK_COOKIES)
-        soup = BeautifulSoup(response.text, "html.parser")
-        script_tag = soup.find("script", id = "__UNIVERSAL_DATA_FOR_REHYDRATION__")
-        if script_tag:
-            try:
-                raw_json = script_tag.string
-                data = json.loads(raw_json)
-                ts = int(data['__DEFAULT_SCOPE__']['webapp.video-detail']['itemInfo']['itemStruct']['createTime'])
-                date_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
-                self.video_schema.date = date_str
-            except Exception as e:
-                LOGGER.error(f"Unable to extract the video date {self.id}:\n\t{str(e)}")
-                
-        if script_tag:
-            try:
-                raw_json = script_tag.string
-                data = json.loads(raw_json)
-                item_struct = data['__DEFAULT_SCOPE__']['webapp.video-detail']['itemInfo']['itemStruct']
-                stats = item_struct.get('stats', {})
-
-                self.video_schema.likes = stats.get('diggCount', '')
-                self.video_schema.views = stats.get('playCount', '')
-                self.video_schema.description = re.sub(r'#\w+', '', item_struct.get('desc', '')).strip()
-
-                text_tags = item_struct.get('textExtra', [])
-                self.video_schema.hashtag = ['#'+tag.get('hashtagName', '') for tag in text_tags if tag.get('hashtagName')]
-                
-                video_data = item_struct.get('video', {})
-                self.video_download_link = video_data.get('playAddr', '')
-            except Exception as e:
-                LOGGER.error(f"Unable to extract info from video {self.id}:\n\t{str(e)}")
-        self.download_video()
+        try:
+            resp = self.session.get(self.video_download_url, headers = headers, cookies = TIKTOK_COOKIES)
+            self.__debug_session(resp)
+            with open(file_path, 'wb') as f:
+                f.write(resp.content)
+            LOGGER.info(f"Saved video {self.metadata.id}")
+        except Exception as e:
+            LOGGER.error(f"Undefined error for video {self.metadata.id}:\n\t{str(e)}")
 
     def quit_driver(self):
         self.driver.quit()
         
-    def run(self, link: str):
-        self.link = link
-        if self.check_link() == False:
+    def run(self, url: str):
+        self.url = url
+        if self.check_url() == False:
             return
 
-        self.id = re.search(r'/video/(\d+)', self.link).group(1)
-        self.storage_path = os.path.join("data/", self.id)
+        self.crawl_metadata()
+        self.storage_path = os.path.join("data/", self.metadata.id)
         os.makedirs(self.storage_path, exist_ok = True)
 
         with ThreadPoolExecutor(max_workers = 2) as executor:
-            executor.submit(self.get_video_comments)
-            executor.submit(self.get_video_metadata)
+            executor.submit(self.crawl_comments)
+            executor.submit(self.download_video)
 
         self.save_to_json()
