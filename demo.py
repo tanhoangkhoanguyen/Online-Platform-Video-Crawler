@@ -1,16 +1,16 @@
 from VideoCrawler.providers.tiktok.tiktok_links_crawler import TikTokLinksCrawler
 from VideoCrawler.providers.tiktok.tiktok_video_crawler import TikTokVideoCrawler
+from VideoCrawler.providers.youtube.youtube_links_crawler import YouTubeLinksCrawler
+from VideoCrawler.providers.youtube.youtube_video_crawler import YoutubeVideoCrawler
+from logger import get_logger
 
-import threading, os, logging, queue
+import threading, os, queue, warnings
+warnings.filterwarnings("ignore")
 from concurrent.futures import ThreadPoolExecutor
 
-logging.basicConfig(
-    level = logging.INFO,
-    format = "[%(levelname)s] [%(filename)s] %(message)s"
-)
-LOGGER = logging.getLogger()
+LOGGER = get_logger(__name__)
 
-class TikTokCrawlerService:
+class CrawlerService:
     def __init__(
             self, 
             keywords: list[str],
@@ -49,6 +49,7 @@ class TikTokCrawlerService:
                 crawler.run(link)
             except Exception as e:
                 LOGGER.error(f"Failed processing {link}\n\t{e}")
+        crawler.quit_driver()
 
     def run(self):
         producer_thread = threading.Thread(target = self.__producer)
@@ -73,11 +74,17 @@ def run_demo(
     ):
     validate_environment(producer_workers + producer_workers)
 
+    # Tiktok
     keywords = ["du lịch đà nẵng"]
-    channels = ["whoisnikorain"]
-    crawler = TikTokCrawlerService(
+    # channels = ["whoisnikorain"]
+
+    # Youtube
+    # keywords = ["lovestruck in the city"]
+    # channels = ["AnimeProAnimeonPiano"]
+
+    crawler = CrawlerService(
         keywords = keywords,
-        channels = channels,
+        channels = [],
         producer_workers = producer_workers,
         consumer_workers = consumer_workers
     )
